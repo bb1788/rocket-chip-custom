@@ -314,6 +314,7 @@ trait Emulator extends Cross.Module2[String, String] {
         "--output-split 20000",
         "--output-split-cfuncs 20000",
         "--max-num-width 1048576",
+        "--trace",
         s"-I${vsrcDir().path}",
         // format: on
       )

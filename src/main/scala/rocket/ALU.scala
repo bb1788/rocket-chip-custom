@@ -33,6 +33,8 @@ object ALU {
   def FN_ROR  = 18.U
   def FN_BEXT = 19.U
 
+  def FN_ADD2 = 20.U
+
   def FN_ANDN = 24.U
   def FN_ORN  = 25.U
   def FN_XNOR = 26.U
@@ -175,6 +177,10 @@ class ALU(implicit p: Parameters) extends AbstractALU()(p) {
 
 
   io.out := out
+  // 当检测到功能码为 ADD2 时，覆盖 ALU 的输出
+  when (io.fn === FN_ADD2) {
+  io.out := io.in1 + (io.in2 << 1.U)
+  }
   if (xLen > 32) {
     require(xLen == 64)
     when (io.dw === DW_32) { io.out := Cat(Fill(32, out(31)), out(31,0)) }

@@ -8,6 +8,9 @@ import chisel3.util._
 object CustomInstructions {
   def MNRET              = BitPat("b01110000001000000000000001110011")
   def CEASE              = BitPat("b00110000010100000000000001110011")
+
+  def BPDISABLE          = BitPat("b00000000000000000101000000001011")
+
   def CFLUSH_D_L1        = BitPat("b111111000000?????000000001110011")
   def CDISCARD_D_L1      = BitPat("b111111000010?????000000001110011")
   def CUSTOM0            = BitPat("b?????????????????000?????0001011")

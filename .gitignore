@@ -15,3 +15,13 @@ docs-target/
 rocketchip.jar
 *#
 .#*
+# Local experiment outputs
+/.metals/
+/.vscode/
+/venv/
+/out/
+/test_add2
+/test_bpdisable.elf
+/*.vcd
+/*.fst
+/*.log

@@ -59,6 +59,7 @@ class FrontendIO(implicit p: Parameters) extends CoreBundle()(p) {
   val btb_update = Valid(new BTBUpdate)
   val bht_update = Valid(new BHTUpdate)
   val ras_update = Valid(new RASUpdate)
+  val bpm_disable = Output(Bool())
   val flush_icache = Output(Bool())
   val npc = Input(UInt(vaddrBitsExtended.W))
   val perf = Input(new FrontendPerfEvents())
@@ -91,7 +92,7 @@ class FrontendModule(outer: Frontend) extends LazyModuleImp(outer)
   val fq = withReset(reset.asBool || io.cpu.req.valid) { Module(new ShiftQueue(new FrontendResp, 5, flow = true)) }
 
   val clock_en_reg = Reg(Bool())
-  val clock_en = clock_en_reg || io.cpu.might_request
+  val clock_en = clock_en_reg || io.cpu.might_request || io.cpu.bpm_disable
   io.cpu.clock_enabled := clock_en
   assert(!(io.cpu.req.valid || io.cpu.sfence.valid || io.cpu.flush_icache || io.cpu.bht_update.valid || io.cpu.btb_update.valid) || io.cpu.might_request)
   val gated_clock =
@@ -117,7 +118,30 @@ class FrontendModule(outer: Frontend) extends LazyModuleImp(outer)
   val s2_pc = RegInit(t = UInt(vaddrBitsExtended.W), alignPC(io_reset_vector))
   val s2_btb_resp_valid = if (usingBTB) Reg(Bool()) else false.B
   val s2_btb_resp_bits = Reg(new BTBResp)
-  val s2_btb_taken = s2_btb_resp_valid && s2_btb_resp_bits.taken
+
+  if (rocketParams.haveBPMDisable) {
+    require(rocketParams.bpmDisableCycles > 0)
+  }
+
+  val bpm_disable_counter = if (rocketParams.haveBPMDisable) {
+    val counter = RegInit(
+      0.U(log2Ceil(rocketParams.bpmDisableCycles + 1).W)
+    )
+
+    when (io.cpu.bpm_disable) {
+      counter := rocketParams.bpmDisableCycles.U
+    }.elsewhen (counter =/= 0.U) {
+      counter := counter - 1.U
+    }
+
+    counter
+  } else {
+    0.U(1.W)
+  }
+
+  val bpm_disabled = bpm_disable_counter =/= 0.U
+
+  val s2_btb_taken = s2_btb_resp_valid && s2_btb_resp_bits.taken && !bpm_disabled
   val s2_tlb_resp = Reg(tlb.io.resp.cloneType)
   val s2_xcpt = s2_tlb_resp.ae.inst || s2_tlb_resp.pf.inst || s2_tlb_resp.gf.inst
   val s2_speculative = RegInit(false.B)
@@ -210,7 +234,7 @@ class FrontendModule(outer: Frontend) extends LazyModuleImp(outer)
       s2_btb_resp_valid := btb.io.resp.valid
       s2_btb_resp_bits := btb.io.resp.bits
     }
-    when (btb.io.resp.valid && btb.io.resp.bits.taken) {
+    when (btb.io.resp.valid && btb.io.resp.bits.taken && !bpm_disabled) {
       predicted_npc := btb.io.resp.bits.target.sextTo(vaddrBitsExtended)
       predicted_taken := true.B
     }
@@ -250,11 +274,11 @@ class FrontendModule(outer: Frontend) extends LazyModuleImp(outer)
       val rvcJALR = bits === Instructions.C_ADD && bits(6,2) === 0.U
       val rvcCall = rvcJAL || rvcJALR
       val rviImm = Mux(rviBits(3), ImmGen(IMM_UJ, rviBits), ImmGen(IMM_SB, rviBits))
-      val predict_taken = s2_btb_resp_bits.bht.taken || force_taken
+      val predict_taken = !bpm_disabled && (s2_btb_resp_bits.bht.taken || force_taken)
       val taken =
         prevRVI && (rviJump || rviJALR || rviBranch && predict_taken) ||
         valid && (rvcJump || rvcJALR || rvcJR || rvcBranch && predict_taken)
-      val predictReturn = btb.io.ras_head.valid && (prevRVI && rviReturn || valid && rvcReturn)
+      val predictReturn = !bpm_disabled && btb.io.ras_head.valid && (prevRVI && rviReturn || valid && rvcReturn)
       val predictJump = prevRVI && rviJump || valid && rvcJump
       val predictBranch = predict_taken && (prevRVI && rviBranch || valid && rvcBranch)
 
@@ -294,6 +318,9 @@ class FrontendModule(outer: Frontend) extends LazyModuleImp(outer)
         when (prevRVI && rviBranch || valid && rvcBranch) {
           btb.io.bht_advance.valid := fq.io.enq.fire && !wrong_path
           btb.io.bht_advance.bits := s2_btb_resp_bits
+          when (bpm_disabled) {
+            btb.io.bht_advance.bits.bht.value := 0.U
+          }
         }
         when (!s2_btb_resp_valid && (predictBranch && s2_btb_resp_bits.bht.strongly_taken || predictJump || predictReturn)) {
           updateBTB := true.B

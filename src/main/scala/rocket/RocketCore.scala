@@ -49,6 +49,8 @@ case class RocketCoreParams(
   fastLoadWord: Boolean = true,
   fastLoadByte: Boolean = false,
   branchPredictionModeCSR: Boolean = false,
+  haveBPMDisable: Boolean = true,
+  bpmDisableCycles: Int = 8,
   clockGate: Boolean = false,
   mvendorid: Int = 0, // 0 means non-commercial implementation
   mimpid: Int = 0x20181004, // release date in BCD
@@ -78,7 +80,7 @@ case class RocketCoreParams(
   override def vfh = vector.map(_.vfh).getOrElse(false)
   override def vExts = vector.map(_.vExts).getOrElse(Nil)
   override def vMemDataBits = vector.map(_.vMemDataBits).getOrElse(0)
-  override val customIsaExt = Option.when(haveCease)("xrocket") // CEASE instruction
+  override val customIsaExt = Option.when(haveCease || haveBPMDisable)("xrocket") // CEASE instruction
   override def minFLen: Int = fpu.map(_.minFLen).getOrElse(32)
   override def customCSRs(implicit p: Parameters) = new RocketCustomCSRs
 }
@@ -238,6 +240,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     Seq(new FenceIDecode(tile.dcache.flushOnFenceI)) ++:
     coreParams.haveCFlush.option(new CFlushDecode(tile.dcache.canSupportCFlushLine)) ++:
     rocketParams.haveCease.option(new CeaseDecode) ++:
+    rocketParams.haveBPMDisable.option(new BPMDisableDecode) ++:
     usingVector.option(new VCFGDecode) ++:
     (if (coreParams.useZba) new ZbaDecode +: (xLen > 32).option(new Zba64Decode).toSeq else Nil) ++:
     (if (coreParams.useZbb) Seq(new ZbbDecode, if (xLen == 32) new Zbb32Decode else new Zbb64Decode) else Nil) ++:
@@ -325,7 +328,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   require(!(coreParams.useRVE && coreParams.fpu.nonEmpty), "Can't select both RVE and floating-point")
   require(!(coreParams.useRVE && coreParams.useHypervisor), "Can't select both RVE and Hypervisor")
   val id_ctrl = Wire(new IntCtrlSigs).decode(id_inst(0), decode_table)
-
+  val id_bpm_disable = rocketParams.haveBPMDisable.B && (CustomInstructions.BPDISABLE === id_inst(0))
   val lgNXRegs = if (coreParams.useRVE) 4 else 5
   val regAddrMask = (1 << lgNXRegs) - 1
 
@@ -555,7 +558,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
         ex_ctrl.sel_alu2 := A2_ZERO
       }
     }
-    ex_reg_flush_pipe := id_ctrl.fence_i || id_csr_flush
+    ex_reg_flush_pipe := id_ctrl.fence_i || id_csr_flush || id_bpm_disable
     ex_reg_load_use := id_load_use
     ex_reg_hls := usingHypervisor.B && id_system_insn && id_ctrl.mem_cmd.isOneOf(M_XRD, M_XWR, M_HLVX)
     ex_reg_mem_size := Mux(usingHypervisor.B && id_system_insn, id_inst(0)(27, 26), id_inst(0)(13, 12))
@@ -1081,6 +1084,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     Mux(wb_xcpt || csr.io.eret, csr.io.evec, // exception or [m|s]ret
     Mux(replay_wb,              wb_reg_pc,   // replay
                                 mem_npc))    // flush or branch misprediction
+  io.imem.bpm_disable := rocketParams.haveBPMDisable.B && wb_reg_valid && !wb_xcpt && !replay_wb && (CustomInstructions.BPDISABLE === wb_reg_inst)
   io.imem.flush_icache := wb_reg_valid && wb_ctrl.fence_i && !io.dmem.s2_nack
   io.imem.might_request := {
     imem_might_request_reg := ex_pc_valid || mem_pc_valid || io.ptw.customCSRs.disableICacheClockGate || io.vector.map(_.trap_check_busy).getOrElse(false.B)
