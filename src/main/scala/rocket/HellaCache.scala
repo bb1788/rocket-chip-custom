@@ -42,7 +42,24 @@ case class DCacheParams(
     acquireBeforeRelease: Boolean = false,
     pipelineWayMux: Boolean = false,
     clockGate: Boolean = false,
-    scratch: Option[BigInt] = None) extends L1CacheParams {
+    scratch: Option[BigInt] = None,
+    pinEnable: Boolean = false,
+    pinBase: BigInt = 0,
+    pinSize: BigInt = 0) extends L1CacheParams {
+    if (pinEnable) {
+    require(pinBase >= 0, "pinBase must be non-negative")
+    require(pinSize > 0, "pinSize must be positive")
+
+    require(
+      pinBase % blockBytes == 0,
+      "pinBase must be cache-line aligned"
+    )
+
+    require(
+      pinSize % blockBytes == 0,
+      "pinSize must be a multiple of blockBytes"
+    )
+    }
 
   def tagCode: Code = Code.fromString(tagECC)
   def dataCode: Code = Code.fromString(dataECC)
