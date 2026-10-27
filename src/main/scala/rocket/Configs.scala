@@ -234,6 +234,7 @@ class WithL1ICacheBlockBytes(bytes: Int = 64)          extends RocketICacheConfi
 
 class WithL1DCacheSets(sets: Int)                      extends RocketDCacheConfig(_.copy(nSets=sets))
 class WithL1DCacheWays(ways: Int)                      extends RocketDCacheConfig(_.copy(nWays=ways))
+class WithL1DCachePin(base: BigInt, size: BigInt)      extends RocketDCacheConfig(dc => dc.copy( pinEnable = true,pinBase = base,pinSize = size))
 class WithL1DCacheECC(dataECC: String, tagECC: String) extends RocketDCacheConfig(_.copy(dataECC = Some(dataECC), tagECC = Some(tagECC)))
 class WithL1DCacheRowBits(n: Int)                      extends RocketDCacheConfig(_.copy(rowBits = n))
 class WithL1DCacheTLBSets(sets: Int)                   extends RocketDCacheConfig(_.copy(nTLBSets = sets))

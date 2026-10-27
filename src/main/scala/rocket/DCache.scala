@@ -114,6 +114,24 @@ class DCacheModule(outer: DCache) extends HellaCacheModule(outer) {
     else ClockGate(clock, clock_en_reg, "dcache_clock_gate")
   class DCacheModuleImpl { // entering gated-clock domain
 
+  def inPinnedRange(paddr: UInt): Bool = {
+  if (cacheParams.pinEnable) {
+    val base = cacheParams.pinBase
+    val end = base + cacheParams.pinSize
+
+    require(end <= (BigInt(1) << paddrBits),
+      "pin range exceeds physical address space")
+
+    val compareBits = paddrBits + 1
+    val addr = paddr.pad(compareBits)
+
+    (addr >= base.U(compareBits.W)) &&
+      (addr < end.U(compareBits.W))
+  } else {
+    false.B
+  } 
+  }
+
   val tlb = Module(new TLB(false, log2Ceil(coreDataBytes), TLBConfig(nTLBSets, nTLBWays, cacheParams.nTLBBasePageSectors, cacheParams.nTLBSuperpages)))
   val pma_checker = Module(new TLB(false, log2Ceil(coreDataBytes), TLBConfig(nTLBSets, nTLBWays, cacheParams.nTLBBasePageSectors, cacheParams.nTLBSuperpages)) with InlineInstance)
 
@@ -430,6 +448,23 @@ class DCacheModule(outer: DCache) extends HellaCacheModule(outer) {
   val s2_victim_or_hit_way = Mux(s2_hit_valid, s2_hit_way, s2_victim_way)
   val s2_victim_tag = Mux(s2_valid_data_error || s2_valid_flush_line, s2_req.addr(paddrBits-1, tagLSB), Mux1H(s2_victim_way, s2_meta_corrected).tag)
   val s2_victim_state = Mux(s2_hit_valid, s2_hit_state, Mux1H(s2_victim_way, s2_meta_corrected).coh)
+
+  // Metadata of the way selected for the current flush scan.
+val s2_flush_meta =
+  Mux1H(s2_victim_way, s2_meta_corrected)
+
+// Physical base address of the selected cache line.
+val s2_flush_line_addr =
+  Cat(
+    s2_flush_meta.tag,
+    s2_req.addr(tagLSB - 1, idxLSB)
+  ) << blockOffBits
+
+// Protect only a valid line in an active full-cache flush scan.
+val s2_flush_pinned =
+  s2_flush_valid &&
+  s2_flush_meta.coh.isValid() &&
+  inPinnedRange(s2_flush_line_addr)
 
   val (s2_prb_ack_data, s2_report_param, probeNewCoh)= s2_probe_state.onProbe(probe_bits.param)
   val (s2_victim_dirty, s2_shrink_param, voluntaryNewCoh) = s2_victim_state.onCacheControl(M_FLUSH)
@@ -811,7 +846,7 @@ class DCacheModule(outer: DCache) extends HellaCacheModule(outer) {
   releaseWay := s2_probe_way
 
   if (!usingDataScratchpad) {
-    when (s2_victimize) {
+    when (s2_victimize && !s2_flush_pinned) {
       assert(s2_valid_flush_line || s2_flush_valid || io.cpu.s2_nack)
       val discard_line = s2_valid_flush_line && s2_req.size(1) || s2_flush_valid && flushing_req.size(1)
       release_state := Mux(s2_victim_dirty && !discard_line, s_voluntary_writeback,
